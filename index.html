@@ -1,0 +1,281 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0" />
+  <title>WebLinkSnap — 網址去追蹤、書籤庫與 Obsidian 轉換器</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body class="mobile-stream-mode">
+  <div class="container">
+    <header class="header">
+      <div class="logo-area">
+        <span class="logo-icon">📎</span>
+        <div>
+          <h1>WebLinkSnap</h1>
+          <p class="subtitle">免 Token・自動去除網址追蹤、分類管理書籤，一鍵轉成純文字貼入 Obsidian</p>
+        </div>
+      </div>
+      <div class="header-actions">
+        <button type="button" id="layoutToggleBtn" class="btn-secondary btn-sm" title="切換長條閱讀或雙欄寬版">
+          🖥️ 切換寬版雙欄
+        </button>
+        <a href="#bookmarkSection" class="btn-secondary btn-sm btn-jump">
+          📚 書籤庫 (<span id="totalBookmarkCount">0</span>)
+        </a>
+      </div>
+    </header>
+
+    <!-- 輸入網址區塊 -->
+    <section class="card input-section">
+      <form id="captureForm" class="url-form">
+        <div class="input-wrapper">
+          <input
+            type="text"
+            id="urlInput"
+            placeholder="貼上任何帶有追蹤碼的網址，例如 YouTube / FB / 購物網 / 文章連結..."
+            autocomplete="off"
+            required
+          />
+          <button type="button" id="pasteBtn" class="btn-secondary" title="從剪貼簿貼上並擷取">
+            📋 貼上
+          </button>
+        </div>
+        <button type="submit" id="fetchBtn" class="btn-primary">
+          <span class="btn-text">🚀 擷取網站資訊</span>
+        </button>
+      </form>
+
+      <!-- 去除追蹤選項與清理結果提示 -->
+      <div class="url-clean-bar">
+        <label class="clean-toggle-label" title="自動移除 utm_*, fbclid, gclid, igsh, YouTube si 等追蹤參數">
+          <input type="checkbox" id="cleanUrlToggle" checked />
+          <span>🧹 自動去除網址追蹤參數 (UTM / FB / IG / YT / 電商追蹤碼)</span>
+        </label>
+        <div id="cleanResultBadge" class="clean-result-badge hidden"></div>
+      </div>
+
+      <div id="statusBar" class="status-bar hidden">
+        <div class="spinner" id="statusSpinner"></div>
+        <span id="statusText">正在擷取網站標題與說明...</span>
+      </div>
+    </section>
+
+    <!-- 結果與輸出區塊 (預設單欄長條流，適合手機與快速操作) -->
+    <main id="resultSection" class="main-grid hidden">
+      <!-- 區塊 1：網站資訊、分類與選用截圖 -->
+      <section class="card preview-panel">
+        <div class="panel-header">
+          <h2>1. 網站資訊與分類</h2>
+          <span id="sourceBadge" class="badge">免金鑰快速擷取</span>
+        </div>
+
+        <div class="field-group">
+          <div class="label-row">
+            <label for="cleanUrlDisplay">乾淨網址（已去除追蹤碼）</label>
+            <button type="button" id="copyCleanUrlBtn" class="btn-secondary btn-xs">🔗 僅複製乾淨網址</button>
+          </div>
+          <input type="text" id="cleanUrlDisplay" readonly />
+        </div>
+
+        <div class="form-row-2col">
+          <div class="field-group">
+            <label for="siteTitle">網站名稱（可直接編輯）</label>
+            <input type="text" id="siteTitle" placeholder="網站標題" />
+          </div>
+
+          <div class="field-group">
+            <label for="siteCategory">網站分類</label>
+            <div class="category-select-group">
+              <select id="siteCategory"></select>
+              <button type="button" id="addCategoryBtn" class="btn-secondary btn-icon" title="新增自訂分類">＋新增</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="field-group">
+          <label for="siteDescription">網站說明 / 個人筆記（自動帶入簡介，可自由修改、支援書籤搜尋）</label>
+          <textarea id="siteDescription" class="desc-textarea" rows="2" placeholder="輸入網站用途說明、重點摘要或 #標籤..."></textarea>
+        </div>
+
+        <!-- 截圖來源切換（預設不擷取圖片，需要再點選） -->
+        <div class="field-group">
+          <div class="label-row">
+            <label>網站圖片 / 截圖（預設不擷取，需要時點選載入）</label>
+            <span id="imgSizeBadge" class="size-badge">純文字模式（無圖片）</span>
+          </div>
+          <div class="source-tabs" id="sourceTabs">
+            <button type="button" class="tab-btn active" data-source="none">🚫 不附圖片 (預設)</button>
+            <button type="button" class="tab-btn" data-source="og">🖼️ 網站封面 (OG)</button>
+            <button type="button" class="tab-btn" data-source="screenshot">🖥️ 擷取網頁截圖</button>
+            <button type="button" class="tab-btn" data-source="mshots">⚡ WP 備援截圖</button>
+          </div>
+        </div>
+
+        <!-- 圖片預覽與壓縮設定（僅在選擇圖片或貼圖時展開） -->
+        <div id="imageExtraContainer" class="hidden">
+          <div class="image-preview-box" id="imagePreviewBox">
+            <div id="imageLoadingOverlay" class="image-loading hidden">
+              <div class="spinner"></div>
+              <span id="imageLoadingText">正在擷取並轉換圖片為文字編碼...</span>
+            </div>
+            <img id="previewImg" alt="網站截圖預覽" />
+            <div class="paste-hint">
+              💡 提示：您也可以自己截圖後直接按 <kbd>Ctrl</kbd>+<kbd>V</kbd> 貼上圖片！
+            </div>
+          </div>
+
+          <!-- 保存模式與壓縮設定 -->
+          <div class="field-group">
+            <label>圖片保存為文字的方式</label>
+            <div class="radio-cards">
+              <label class="radio-card active" id="modeBase64Card">
+                <input type="radio" name="imageMode" value="base64" checked />
+                <div>
+                  <div class="radio-title">📦 Base64 純文字內嵌（推薦）</div>
+                  <div class="radio-desc">將截圖直接編成文字存入筆記，永久離線可用、永不破圖</div>
+                </div>
+              </label>
+              <label class="radio-card" id="modeUrlCard">
+                <input type="radio" name="imageMode" value="url" />
+                <div>
+                  <div class="radio-title">🔗 外部圖片網址</div>
+                  <div class="radio-desc">文字最短最乾淨，但閱讀筆記時需連網載入圖片</div>
+                </div>
+              </label>
+            </div>
+          </div>
+
+          <div id="compressionControls" class="compression-box">
+            <div class="control-item">
+              <label for="imgWidthSelect">縮圖寬度：</label>
+              <select id="imgWidthSelect">
+                <option value="480">小尺寸 (480px - 字串最短)</option>
+                <option value="640" selected>適中 (640px - 推薦)</option>
+                <option value="800">高畫質 (800px)</option>
+                <option value="1024">清晰大圖 (1024px)</option>
+              </select>
+            </div>
+            <div class="control-item">
+              <label for="imgQualitySelect">壓縮品質：</label>
+              <select id="imgQualitySelect">
+                <option value="0.5">高壓縮 (50%)</option>
+                <option value="0.7" selected>標準 (70% - 推薦)</option>
+                <option value="0.85">精細 (85%)</option>
+              </select>
+            </div>
+          </div>
+        </div>
+
+        <div class="save-bookmark-bar">
+          <button type="button" id="saveBookmarkBtn" class="btn-save-bookmark">
+            ⭐ 儲存 / 更新至書籤庫
+          </button>
+          <span id="saveStatusHint" class="save-hint">修改名稱、分類或說明後會自動同步儲存</span>
+        </div>
+      </section>
+
+      <!-- 區塊 2：Obsidian 輸出與一鍵複製 -->
+      <section class="card output-panel">
+        <div class="panel-header">
+          <h2>2. Obsidian 文字輸出</h2>
+          <span id="charCount" class="char-count">0 字元</span>
+        </div>
+
+        <!-- 排版格式選擇 (預設為標準 Markdown) -->
+        <div class="field-group">
+          <label for="templateSelect">Obsidian 排版格式</label>
+          <select id="templateSelect">
+            <option value="standard" selected>📝 標準 Markdown（預設：標題 + 分類 + 說明）</option>
+            <option value="compact">📱 手機精簡條列（單段緊湊長條閱讀）</option>
+            <option value="callout">🗂️ Obsidian 卡片區塊 (Callout 語法)</option>
+            <option value="reflink">🧹 乾淨參考連結式 (附圖時將 Base64 收納在底部)</option>
+          </select>
+        </div>
+
+        <!-- 一鍵複製主按鈕 -->
+        <div class="action-buttons">
+          <button type="button" id="copyBtn" class="btn-copy">
+            📋 一鍵複製 Markdown（貼上 Obsidian）
+          </button>
+          <button type="button" id="openObsidianBtn" class="btn-obsidian" title="喚起設備上的 Obsidian 建立新筆記">
+            💎 傳送到 Obsidian
+          </button>
+        </div>
+
+        <!-- 產生的文字內容 -->
+        <div class="field-group markdown-box-group">
+          <textarea id="markdownOutput" readonly spellcheck="false"></textarea>
+        </div>
+      </section>
+    </main>
+
+    <!-- 書籤庫區塊 (支援長條閱讀模式與搜尋篩選) -->
+    <section id="bookmarkSection" class="card bookmark-section">
+      <div class="bookmark-header">
+        <div class="bookmark-title-group">
+          <h2>📚 網站書籤庫</h2>
+          <span class="bookmark-subtitle">支援依分類、網站說明與標題快速搜尋，適合手機上下長條滑動閱讀</span>
+        </div>
+        <div class="bookmark-tools">
+          <button type="button" id="viewModeToggleBtn" class="btn-secondary btn-sm" title="切換長條閱讀清單或縮圖網格">
+            🗂️ 切換網格檢視
+          </button>
+          <button type="button" id="exportMarkdownAllBtn" class="btn-secondary btn-sm" title="將目前篩選的書籤整批複製為 Obsidian 筆記">
+            📝 複製篩選清單
+          </button>
+          <button type="button" id="exportJsonBtn" class="btn-secondary btn-sm" title="匯出 JSON 備份檔">
+            📤 備份
+          </button>
+          <label class="btn-secondary btn-sm import-label" title="從 JSON 備份檔還原書籤">
+            📥 匯入
+            <input type="file" id="importJsonInput" accept=".json" style="display: none;" />
+          </label>
+          <button type="button" id="clearHistoryBtn" class="btn-text-danger">🗑️ 清空</button>
+        </div>
+      </div>
+
+      <!-- 搜尋與排序工具列 -->
+      <div class="bookmark-filter-bar">
+        <div class="search-box">
+          <span class="search-icon">🔍</span>
+          <input
+            type="text"
+            id="bookmarkSearchInput"
+            placeholder="搜尋網站名稱、說明、分類或網址..."
+            autocomplete="off"
+          />
+          <button type="button" id="clearSearchBtn" class="clear-search-btn hidden" title="清除搜尋">✕</button>
+        </div>
+        <div class="sort-box">
+          <select id="bookmarkSortSelect" title="排序方式">
+            <option value="newest">🕒 最新加入優先</option>
+            <option value="oldest">⏳ 最早加入優先</option>
+            <option value="title">🔤 依網站名稱排序</option>
+          </select>
+        </div>
+      </div>
+
+      <!-- 分類標籤篩選列 -->
+      <div id="categoryFilterBar" class="category-pills"></div>
+
+      <!-- 書籤清單 (預設為適合手機長條閱讀的 stream-list 樣式) -->
+      <div id="bookmarkList" class="bookmark-stream"></div>
+
+      <!-- 無結果或空狀態提示 -->
+      <div id="emptyBookmarkState" class="empty-state">
+        <div class="empty-icon">🔖</div>
+        <p id="emptyStateText">目前還沒有儲存的網站書籤，在上方貼上網址擷取後就會自動收納在這裡！</p>
+      </div>
+    </section>
+  </div>
+
+  <!-- 隱藏的 Canvas 用於將截圖轉為壓縮後的 Base64 文字 -->
+  <canvas id="hiddenCanvas" style="display: none;"></canvas>
+
+  <!-- 吐司通知 (Toast) -->
+  <div id="toast" class="toast hidden"></div>
+
+  <script src="app.js"></script>
+</body>
+</html>
