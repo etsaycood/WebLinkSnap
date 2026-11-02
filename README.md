@@ -1,6 +1,7 @@
 # 📎 WebLinkSnap
 
 **WebLinkSnap** 是一個完全免 Token / API Key 的純前端網址整理與 Obsidian 轉換工具，可直接透過 GitHub Pages 使用。
+🔗 線上展示網址：https://etsaycood.github.io/WebLinkSnap/
 
 ## ✨ 核心功能
 
