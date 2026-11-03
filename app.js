@@ -1,4 +1,5 @@
-// WebLinkSnap - 免 Token 網址去追蹤、分類書籤庫、多雲端備援分享與 Obsidian 轉換器
+// WebLinkSnap - 免重複輸入 Token 網址去追蹤、IndexedDB 大容量書籤庫、
+// 情境一：多重公開暫存分享 (?s=xxxx) ＋ 情境二：GitHub 私密長期保存 (Secret Gist / Private Repo)
 
 const DEFAULT_CATEGORIES = [
   "未分類",
@@ -13,7 +14,14 @@ const DEFAULT_CATEGORIES = [
 const STORAGE_KEYS = {
   BOOKMARKS: "weblink_obsidian_bookmarks_v2",
   LEGACY_HISTORY: "weblink_obsidian_history",
-  CATEGORIES: "weblink_obsidian_categories"
+  CATEGORIES: "weblink_obsidian_categories",
+  VAULT_CONFIG: "weblink_private_vault_config_v1"
+};
+
+const IDB_CONFIG = {
+  DB_NAME: "WebLinkSnapVaultDB",
+  VERSION: 1,
+  STORE_NAME: "kv_store"
 };
 
 // 常見追蹤參數黑名單
@@ -61,18 +69,54 @@ const state = {
   bookmarks: [],
   // 分享檢視模式狀態
   isViewingShared: false,
-  sharedBookmarks: []
+  sharedBookmarks: [],
+  // 私密雲端保險箱設定 (GitHub Secret Gist / Private Repo)
+  vault: {
+    mode: "gist",          // 'gist' | 'repo'
+    token: "",
+    gistId: "",
+    repo: "etsaycood/WebLinkSnap-Private",
+    path: "weblinksnap-vault.json",
+    autoSync: true,
+    lastSyncAt: "",
+    fileUrl: ""
+  }
 };
 
 // DOM 元素
 const layoutToggleBtn = document.getElementById("layoutToggleBtn");
 const viewModeToggleBtn = document.getElementById("viewModeToggleBtn");
+
+// 私密雲端保險箱 DOM
+const privateVaultToggleBtn = document.getElementById("privateVaultToggleBtn");
+const vaultStatusShort = document.getElementById("vaultStatusShort");
+const privateVaultPanel = document.getElementById("privateVaultPanel");
+const closeVaultPanelBtn = document.getElementById("closeVaultPanelBtn");
+const vaultModeSelect = document.getElementById("vaultModeSelect");
+const vaultTokenInput = document.getElementById("vaultTokenInput");
+const vaultGistFields = document.getElementById("vaultGistFields");
+const vaultGistIdInput = document.getElementById("vaultGistIdInput");
+const vaultRepoFields = document.getElementById("vaultRepoFields");
+const vaultRepoInput = document.getElementById("vaultRepoInput");
+const vaultPathInput = document.getElementById("vaultPathInput");
+const vaultAutoSyncToggle = document.getElementById("vaultAutoSyncToggle");
+const vaultSaveAndPushBtn = document.getElementById("vaultSaveAndPushBtn");
+const vaultPullBtn = document.getElementById("vaultPullBtn");
+const vaultActualFileLink = document.getElementById("vaultActualFileLink");
+const vaultCopyBindCodeBtn = document.getElementById("vaultCopyBindCodeBtn");
+const vaultPasteBindCodeBtn = document.getElementById("vaultPasteBindCodeBtn");
+const vaultDisconnectBtn = document.getElementById("vaultDisconnectBtn");
+const vaultLastSyncInfo = document.getElementById("vaultLastSyncInfo");
+const quickVaultSyncBtn = document.getElementById("quickVaultSyncBtn");
+
+// 分享橫幅 DOM
 const sharedViewBanner = document.getElementById("sharedViewBanner");
 const sharedBannerTitle = document.getElementById("sharedBannerTitle");
 const sharedBannerMeta = document.getElementById("sharedBannerMeta");
 const importSharedBtn = document.getElementById("importSharedBtn");
 const exitSharedViewBtn = document.getElementById("exitSharedViewBtn");
 
+// 擷取與編輯區 DOM
 const captureForm = document.getElementById("captureForm");
 const urlInput = document.getElementById("urlInput");
 const pasteBtn = document.getElementById("pasteBtn");
@@ -136,14 +180,471 @@ const toastEl = document.getElementById("toast");
 // 初始化
 document.addEventListener("DOMContentLoaded", async () => {
   loadCategories();
-  loadBookmarks();
+  loadVaultConfig();
+  await loadBookmarksFromStorage();
   renderCategorySelect();
   renderBookmarkLibrary();
   bindEvents();
   await checkIncomingShareLink();
+
+  // 若已綁定私密雲端且開啟自動同步，啟動時自動在背景拉取最新書籤
+  if (!state.isViewingShared && isVaultConfigured() && state.vault.autoSync) {
+    pullFromPrivateVault(true);
+  }
 });
 
+// ==================================================
+// IndexedDB 大容量儲存引擎 (支援幾百個網站 + 清晰縮圖)
+// ==================================================
+function openIndexedDB() {
+  return new Promise((resolve, reject) => {
+    if (!window.indexedDB) {
+      reject(new Error("IndexedDB not supported"));
+      return;
+    }
+    const req = indexedDB.open(IDB_CONFIG.DB_NAME, IDB_CONFIG.VERSION);
+    req.onupgradeneeded = (e) => {
+      const db = e.target.result;
+      if (!db.objectStoreNames.contains(IDB_CONFIG.STORE_NAME)) {
+        db.createObjectStore(IDB_CONFIG.STORE_NAME);
+      }
+    };
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
+}
+
+async function idbGet(key) {
+  const db = await openIndexedDB();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(IDB_CONFIG.STORE_NAME, "readonly");
+    const store = tx.objectStore(IDB_CONFIG.STORE_NAME);
+    const req = store.get(key);
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
+}
+
+async function idbSet(key, val) {
+  const db = await openIndexedDB();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(IDB_CONFIG.STORE_NAME, "readwrite");
+    const store = tx.objectStore(IDB_CONFIG.STORE_NAME);
+    const req = store.put(val, key);
+    req.onsuccess = () => resolve(true);
+    req.onerror = () => reject(req.error);
+  });
+}
+
+// ==================================================
+// 情境二：GitHub 私密長期保存 (Secret Gist / Private Repo)
+// ==================================================
+function loadVaultConfig() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(STORAGE_KEYS.VAULT_CONFIG) || "null");
+    if (saved && typeof saved === "object") {
+      state.vault = { ...state.vault, ...saved };
+    }
+  } catch {}
+  syncVaultFormUI();
+}
+
+function saveVaultConfig() {
+  try {
+    localStorage.setItem(STORAGE_KEYS.VAULT_CONFIG, JSON.stringify(state.vault));
+  } catch {}
+  syncVaultFormUI();
+}
+
+function isVaultConfigured() {
+  if (!state.vault.token) return false;
+  if (state.vault.mode === "gist") return Boolean(state.vault.gistId);
+  return Boolean(state.vault.repo && state.vault.path);
+}
+
+function syncVaultFormUI() {
+  vaultModeSelect.value = state.vault.mode || "gist";
+  vaultTokenInput.value = state.vault.token || "";
+  vaultGistIdInput.value = state.vault.gistId || "";
+  vaultRepoInput.value = state.vault.repo || "etsaycood/WebLinkSnap-Private";
+  vaultPathInput.value = state.vault.path || "weblinksnap-vault.json";
+  vaultAutoSyncToggle.checked = state.vault.autoSync !== false;
+
+  const isGist = vaultModeSelect.value === "gist";
+  vaultGistFields.classList.toggle("hidden", !isGist);
+  vaultRepoFields.classList.toggle("hidden", isGist);
+
+  if (state.vault.token && (state.vault.gistId || state.vault.mode === "repo")) {
+    vaultStatusShort.textContent = "🟢 已綁定";
+    if (state.vault.fileUrl) {
+      vaultActualFileLink.href = state.vault.fileUrl;
+      vaultActualFileLink.classList.remove("hidden");
+    }
+    vaultLastSyncInfo.textContent = state.vault.lastSyncAt
+      ? `✅ 已綁定 (${state.vault.mode === "gist" ? "Secret Gist: " + state.vault.gistId : state.vault.repo})・上次同步：${state.vault.lastSyncAt}`
+      : `✅ 已綁定私密空間，隨時可同步`;
+  } else {
+    vaultStatusShort.textContent = "未綁定";
+    vaultActualFileLink.classList.add("hidden");
+    vaultLastSyncInfo.textContent = "尚未綁定私密雲端（目前僅保存在此瀏覽器 IndexedDB）";
+  }
+}
+
+function readVaultFormToState() {
+  state.vault.mode = vaultModeSelect.value;
+  state.vault.token = vaultTokenInput.value.trim();
+  state.vault.gistId = extractGistId(vaultGistIdInput.value.trim());
+  state.vault.repo = vaultRepoInput.value.trim() || "etsaycood/WebLinkSnap-Private";
+  state.vault.path = vaultPathInput.value.trim() || "weblinksnap-vault.json";
+  state.vault.autoSync = vaultAutoSyncToggle.checked;
+}
+
+function extractGistId(input) {
+  if (!input) return "";
+  const parts = input.split("/").filter(Boolean);
+  return parts[parts.length - 1];
+}
+
+// 上傳 (Push) 所有書籤與縮圖至 GitHub 私密空間
+async function pushToPrivateVault(silent = false) {
+  readVaultFormToState();
+  if (!state.vault.token) {
+    if (!silent) alert("請先貼上您的 GitHub Personal Access Token（只需設定一次即會永久記住）！");
+    return false;
+  }
+
+  const vaultPayload = {
+    app: "WebLinkSnap-PrivateVault",
+    updatedAt: formatNow(),
+    categories: state.categories,
+    bookmarks: state.bookmarks
+  };
+  const jsonContent = JSON.stringify(vaultPayload, null, 2);
+
+  if (!silent) {
+    vaultSaveAndPushBtn.disabled = true;
+    vaultLastSyncInfo.textContent = "⏳ 正在加密上傳書籤與縮圖至您的 GitHub 私密空間...";
+  }
+
+  try {
+    const headers = {
+      Authorization: `Bearer ${state.vault.token}`,
+      Accept: "application/vnd.github+json",
+      "Content-Type": "application/json"
+    };
+
+    if (state.vault.mode === "gist") {
+      // 模式 A：GitHub Secret Gist
+      if (!state.vault.gistId) {
+        // 自動建立全新的 Secret Gist (public: false)
+        const createRes = await fetch("https://api.github.com/gists", {
+          method: "POST",
+          headers,
+          body: JSON.stringify({
+            description: "WebLinkSnap 個人私密書籤與縮圖保險箱 (Private Vault)",
+            public: false,
+            files: {
+              "weblinksnap-vault.json": { content: jsonContent }
+            }
+          })
+        });
+        if (!createRes.ok) throw new Error(`GitHub Gist 建立失敗 (${createRes.status})`);
+        const created = await createRes.json();
+        state.vault.gistId = created.id;
+        state.vault.fileUrl = created.html_url;
+        vaultGistIdInput.value = created.id;
+      } else {
+        // 更新現有 Secret Gist
+        const updateRes = await fetch(`https://api.github.com/gists/${encodeURIComponent(state.vault.gistId)}`, {
+          method: "PATCH",
+          headers,
+          body: JSON.stringify({
+            files: {
+              "weblinksnap-vault.json": { content: jsonContent }
+            }
+          })
+        });
+        if (!updateRes.ok) throw new Error(`GitHub Gist 更新失敗 (${updateRes.status})`);
+        const updated = await updateRes.json();
+        state.vault.fileUrl = updated.html_url;
+      }
+    } else {
+      // 模式 B：GitHub Private Repository
+      const repoName = state.vault.repo;
+      const filePath = state.vault.path;
+
+      // 1. 先檢查該檔案是否已存在以取得 sha
+      let fileSha = "";
+      const checkRes = await fetch(
+        `https://api.github.com/repos/${repoName}/contents/${filePath}`,
+        { headers }
+      );
+
+      if (checkRes.status === 404) {
+        // 檢查是否連 Repo 都還沒建，若是則自動幫使用者建立 Private Repo！
+        const repoCheck = await fetch(`https://api.github.com/repos/${repoName}`, { headers });
+        if (repoCheck.status === 404) {
+          const shortRepoName = repoName.split("/").pop();
+          const createRepoRes = await fetch("https://api.github.com/user/repos", {
+            method: "POST",
+            headers,
+            body: JSON.stringify({
+              name: shortRepoName,
+              description: "WebLinkSnap 個人私密書籤庫 (Private Repository)",
+              private: true,
+              auto_init: true
+            })
+          });
+          if (!createRepoRes.ok) {
+            throw new Error(`找不到儲存庫 ${repoName}，且自動建立失敗 (${createRepoRes.status})`);
+          }
+          await new Promise((r) => setTimeout(r, 1200));
+        }
+      } else if (checkRes.ok) {
+        const meta = await checkRes.json();
+        fileSha = meta.sha || "";
+      }
+
+      const putBody = {
+        message: `Sync WebLinkSnap private vault (${state.bookmarks.length} bookmarks)`,
+        content: encodeUtf8Base64(jsonContent)
+      };
+      if (fileSha) putBody.sha = fileSha;
+
+      const putRes = await fetch(
+        `https://api.github.com/repos/${repoName}/contents/${filePath}`,
+        {
+          method: "PUT",
+          headers,
+          body: JSON.stringify(putBody)
+        }
+      );
+      if (!putRes.ok) throw new Error(`GitHub Repo 寫入失敗 (${putRes.status})`);
+      const putData = await putRes.json();
+      state.vault.fileUrl = putData.content?.html_url || `https://github.com/${repoName}/blob/main/${filePath}`;
+    }
+
+    state.vault.lastSyncAt = formatNow();
+    saveVaultConfig();
+    if (!silent) {
+      showToast(`🔒 已成功同步 ${state.bookmarks.length} 筆書籤（含縮圖）至 GitHub 私密空間！`);
+    } else {
+      saveStatusHint.textContent = `🔒 已自動備份至 GitHub 私密雲端 (${formatNow().slice(11)})`;
+    }
+    return true;
+  } catch (err) {
+    if (!silent) {
+      alert(`私密雲端同步失敗：${err.message}\n請確認您的 Token 是否有勾選 gist 或 repo 權限。`);
+    }
+    vaultLastSyncInfo.textContent = `⚠️ 同步失敗：${err.message}`;
+    return false;
+  } finally {
+    if (!silent) vaultSaveAndPushBtn.disabled = false;
+  }
+}
+
+// 從 GitHub 私密空間拉取 (Pull) 並智慧合併書籤與縮圖
+async function pullFromPrivateVault(silent = false) {
+  readVaultFormToState();
+  if (!isVaultConfigured()) {
+    if (!silent) alert("請先填寫 Token 與 Gist ID（或先按「儲存綁定並立即上傳備份」自動建立）！");
+    return false;
+  }
+
+  if (!silent) {
+    vaultPullBtn.disabled = true;
+    vaultLastSyncInfo.textContent = "⏳ 正在從 GitHub 私密空間拉取您的書籤與縮圖...";
+  }
+
+  try {
+    const headers = {
+      Authorization: `Bearer ${state.vault.token}`,
+      Accept: "application/vnd.github+json"
+    };
+
+    let remoteData = null;
+
+    if (state.vault.mode === "gist") {
+      const res = await fetch(`https://api.github.com/gists/${encodeURIComponent(state.vault.gistId)}`, {
+        headers
+      });
+      if (!res.ok) throw new Error(`無法讀取 Gist (${res.status})`);
+      const gist = await res.json();
+      state.vault.fileUrl = gist.html_url;
+      const fileObj =
+        gist.files?.["weblinksnap-vault.json"] || Object.values(gist.files || {})[0];
+      if (!fileObj) throw new Error("Gist 中找不到書籤資料檔");
+
+      if (fileObj.truncated && fileObj.raw_url) {
+        const rawRes = await fetch(fileObj.raw_url);
+        remoteData = await rawRes.json();
+      } else {
+        remoteData = JSON.parse(fileObj.content);
+      }
+    } else {
+      const res = await fetch(
+        `https://api.github.com/repos/${state.vault.repo}/contents/${state.vault.path}`,
+        {
+          headers: {
+            Authorization: `Bearer ${state.vault.token}`,
+            Accept: "application/vnd.github.raw"
+          }
+        }
+      );
+      if (!res.ok) throw new Error(`無法讀取私人儲存庫檔案 (${res.status})`);
+      remoteData = await res.json();
+      state.vault.fileUrl = `https://github.com/${state.vault.repo}/blob/main/${state.vault.path}`;
+    }
+
+    if (remoteData && Array.isArray(remoteData.bookmarks)) {
+      if (Array.isArray(remoteData.categories)) {
+        remoteData.categories.forEach((c) => {
+          if (c && !state.categories.includes(c)) state.categories.push(c);
+        });
+        saveCategories();
+      }
+
+      // 智慧合併雲端與本機書籤（保留最新修改與縮圖）
+      const mapByUrl = new Map();
+      state.bookmarks.forEach((b) => mapByUrl.set(b.url, b));
+      remoteData.bookmarks.forEach((rb) => {
+        if (!rb || !rb.url) return;
+        const local = mapByUrl.get(rb.url);
+        if (!local) {
+          mapByUrl.set(rb.url, rb);
+        } else {
+          const newer = (rb.timestamp || 0) >= (local.timestamp || 0) ? rb : local;
+          const thumb = newer.thumb || local.thumb || rb.thumb || "";
+          mapByUrl.set(rb.url, { ...local, ...newer, thumb });
+        }
+      });
+
+      state.bookmarks = Array.from(mapByUrl.values()).sort(
+        (a, b) => (b.timestamp || 0) - (a.timestamp || 0)
+      );
+
+      await persistBookmarks();
+      state.vault.lastSyncAt = formatNow();
+      saveVaultConfig();
+      renderCategorySelect();
+      renderBookmarkLibrary();
+
+      if (!silent) {
+        showToast(`📥 同步完成！目前共 ${state.bookmarks.length} 筆私密書籤`);
+      }
+      return true;
+    }
+  } catch (err) {
+    if (!silent) {
+      alert(`從私密雲端拉取失敗：${err.message}`);
+    }
+    vaultLastSyncInfo.textContent = `⚠️ 拉取失敗：${err.message}`;
+  } finally {
+    if (!silent) vaultPullBtn.disabled = false;
+  }
+  return false;
+}
+
+let vaultAutoPushTimer = null;
+function triggerAutoPushToVault() {
+  if (!isVaultConfigured() || !state.vault.autoSync || state.isViewingShared) return;
+  clearTimeout(vaultAutoPushTimer);
+  vaultAutoPushTimer = setTimeout(() => {
+    pushToPrivateVault(true);
+  }, 1600);
+}
+
+// ==================================================
+// 事件綁定
+// ==================================================
 function bindEvents() {
+  // 開關私密雲端保險箱面板
+  privateVaultToggleBtn.addEventListener("click", () => {
+    privateVaultPanel.classList.toggle("hidden");
+  });
+
+  closeVaultPanelBtn.addEventListener("click", () => {
+    privateVaultPanel.classList.add("hidden");
+  });
+
+  vaultModeSelect.addEventListener("change", () => {
+    state.vault.mode = vaultModeSelect.value;
+    syncVaultFormUI();
+  });
+
+  vaultSaveAndPushBtn.addEventListener("click", async () => {
+    await pushToPrivateVault(false);
+  });
+
+  vaultPullBtn.addEventListener("click", async () => {
+    await pullFromPrivateVault(false);
+  });
+
+  quickVaultSyncBtn.addEventListener("click", async () => {
+    if (!state.vault.token) {
+      privateVaultPanel.classList.remove("hidden");
+      window.scrollTo({ top: privateVaultPanel.offsetTop - 16, behavior: "smooth" });
+      showToast("請先完成初次 GitHub 私密空間綁定（只需設定一次）");
+      return;
+    }
+    showToast("⏳ 正在與 GitHub 私密空間雙向同步...");
+    await pullFromPrivateVault(true);
+    await pushToPrivateVault(false);
+  });
+
+  // 複製與貼上跨裝置快速綁定碼（方便手機一秒完成設定）
+  vaultCopyBindCodeBtn.addEventListener("click", async () => {
+    readVaultFormToState();
+    if (!state.vault.token) {
+      alert("請先填入 Token 並完成綁定後，再複製跨裝置綁定碼！");
+      return;
+    }
+    const code = "WLS_VAULT:" + encodeUtf8Base64(JSON.stringify(state.vault));
+    await copyTextToClipboard(code);
+    showToast("📱 已複製跨裝置綁定碼！在手機打開網頁點「貼上綁定碼」即可一鍵同步");
+  });
+
+  vaultPasteBindCodeBtn.addEventListener("click", async () => {
+    let raw = "";
+    try {
+      raw = await navigator.clipboard.readText();
+    } catch {
+      raw = prompt("請貼上 WLS_VAULT: 開頭的跨裝置快速綁定碼：") || "";
+    }
+    raw = raw.trim();
+    if (!raw.startsWith("WLS_VAULT:")) {
+      const manual = prompt("請貼上 WLS_VAULT: 開頭的跨裝置快速綁定碼：");
+      if (!manual || !manual.trim().startsWith("WLS_VAULT:")) return;
+      raw = manual.trim();
+    }
+    try {
+      const parsed = JSON.parse(decodeUtf8Base64(raw.slice("WLS_VAULT:".length)));
+      state.vault = { ...state.vault, ...parsed };
+      saveVaultConfig();
+      showToast("✅ 綁定碼套用成功！正在自動拉取您的私密書籤...");
+      await pullFromPrivateVault(false);
+    } catch {
+      alert("綁定碼格式不正確！");
+    }
+  });
+
+  vaultDisconnectBtn.addEventListener("click", () => {
+    if (!confirm("確定要在此裝置解除私密雲端綁定嗎？（雲端上的檔案與本機現有書籤不會被刪除）")) return;
+    state.vault = {
+      mode: "gist",
+      token: "",
+      gistId: "",
+      repo: "etsaycood/WebLinkSnap-Private",
+      path: "weblinksnap-vault.json",
+      autoSync: true,
+      lastSyncAt: "",
+      fileUrl: ""
+    };
+    localStorage.removeItem(STORAGE_KEYS.VAULT_CONFIG);
+    syncVaultFormUI();
+    showToast("已解除此裝置的私密雲端綁定");
+  });
+
   // 頂部版面切換：手機長條單欄 vs 寬螢幕雙欄
   layoutToggleBtn.addEventListener("click", () => {
     const isStream = document.body.classList.toggle("mobile-stream-mode");
@@ -158,7 +659,7 @@ function bindEvents() {
   });
 
   // 分享檢視模式：匯入全部 / 返回自己的書籤庫
-  importSharedBtn.addEventListener("click", () => {
+  importSharedBtn.addEventListener("click", async () => {
     if (!state.sharedBookmarks.length) return;
     let count = 0;
     state.sharedBookmarks.forEach((item) => {
@@ -175,8 +676,9 @@ function bindEvents() {
       count++;
     });
     saveCategories();
-    persistBookmarks();
+    await persistBookmarks();
     exitSharedMode();
+    triggerAutoPushToVault();
     showToast(`📥 已成功將 ${count} 筆分享書籤收進您的書籤庫！`);
   });
 
@@ -184,7 +686,7 @@ function bindEvents() {
     exitSharedMode();
   });
 
-  // 產生目前篩選清單的雲端分享連結
+  // 產生目前篩選清單的雲端分享連結 (情境一：公開暫存空間)
   shareFilteredBtn.addEventListener("click", async () => {
     const items = getFilteredBookmarks();
     if (!items.length) {
@@ -198,7 +700,6 @@ function bindEvents() {
     await createAndShowShareLink(items, titleLabel);
   });
 
-  // 複製分享連結
   copyShareUrlBtn.addEventListener("click", async () => {
     const url = shareUrlOutput.value;
     if (!url) return;
@@ -206,7 +707,6 @@ function bindEvents() {
     showToast("🔗 已複製分享連結！可直接貼給朋友");
   });
 
-  // 手機/系統原生分享選單
   nativeShareBtn.addEventListener("click", async () => {
     const url = shareUrlOutput.value;
     if (!url) return;
@@ -232,7 +732,6 @@ function bindEvents() {
     await processUrl(rawUrl);
   });
 
-  // 貼上網址按鈕
   pasteBtn.addEventListener("click", async () => {
     try {
       const text = await navigator.clipboard.readText();
@@ -246,7 +745,6 @@ function bindEvents() {
     }
   });
 
-  // 僅複製乾淨網址按鈕
   copyCleanUrlBtn.addEventListener("click", async () => {
     const u = cleanUrlDisplay.value || state.url;
     if (!u) return;
@@ -254,7 +752,6 @@ function bindEvents() {
     showToast("🔗 已複製乾淨網址！");
   });
 
-  // 網站標題、分類、說明變更時即時更新 Markdown 並同步至書籤庫
   siteTitleInput.addEventListener("input", () => {
     state.title = siteTitleInput.value;
     updateMarkdownOutput();
@@ -273,7 +770,6 @@ function bindEvents() {
     autoSyncCurrentBookmark();
   });
 
-  // 新增自訂分類
   addCategoryBtn.addEventListener("click", () => {
     const newCat = prompt("請輸入新分類名稱（例如：投資理財、影視娛樂、開源專案）：");
     if (!newCat || !newCat.trim()) return;
@@ -291,13 +787,11 @@ function bindEvents() {
     showToast(`已新增並套用分類「${cleaned}」`);
   });
 
-  // 手動點擊儲存 / 更新書籤
-  saveBookmarkBtn.addEventListener("click", () => {
-    upsertCurrentToBookmarks();
+  saveBookmarkBtn.addEventListener("click", async () => {
+    await upsertCurrentToBookmarks();
     showToast("⭐ 已儲存更新至書籤庫！");
   });
 
-  // 切換圖片/截圖來源
   sourceTabs.addEventListener("click", async (e) => {
     const btn = e.target.closest(".tab-btn");
     if (!btn) return;
@@ -306,7 +800,6 @@ function bindEvents() {
     autoSyncCurrentBookmark();
   });
 
-  // 調整 Base64 壓縮尺寸與畫質
   imgWidthSelect.addEventListener("change", async () => {
     await refreshBase64FromCurrentImage();
     autoSyncCurrentBookmark();
@@ -316,7 +809,6 @@ function bindEvents() {
     autoSyncCurrentBookmark();
   });
 
-  // 切換圖片保存模式
   document.querySelectorAll('input[name="imageMode"]').forEach((radio) => {
     radio.addEventListener("change", (e) => {
       state.imageMode = e.target.value;
@@ -327,13 +819,11 @@ function bindEvents() {
     });
   });
 
-  // 切換 Obsidian 模板
   templateSelect.addEventListener("change", () => {
     state.template = templateSelect.value;
     updateMarkdownOutput();
   });
 
-  // 一鍵複製 Markdown
   copyBtn.addEventListener("click", async () => {
     const text = markdownOutput.value;
     if (!text) return;
@@ -346,7 +836,6 @@ function bindEvents() {
     }, 2200);
   });
 
-  // 傳送到 Obsidian
   openObsidianBtn.addEventListener("click", () => {
     const safeTitle = (state.title || "網站書籤").replace(/[\\/:*?"<>|]/g, " ").trim().slice(0, 60);
     const content = markdownOutput.value;
@@ -359,7 +848,6 @@ function bindEvents() {
     }
   });
 
-  // 支援直接按 Ctrl+V 貼上自己截的圖片
   window.addEventListener("paste", async (e) => {
     const items = e.clipboardData?.items;
     if (!items) return;
@@ -375,7 +863,6 @@ function bindEvents() {
     }
   });
 
-  // 書籤搜尋與清除
   bookmarkSearchInput.addEventListener("input", () => {
     state.searchQuery = bookmarkSearchInput.value.trim();
     clearSearchBtn.classList.toggle("hidden", !state.searchQuery);
@@ -389,13 +876,11 @@ function bindEvents() {
     renderBookmarkLibrary();
   });
 
-  // 書籤排序
   bookmarkSortSelect.addEventListener("change", () => {
     state.sortBy = bookmarkSortSelect.value;
     renderBookmarkLibrary();
   });
 
-  // 整批複製目前篩選的書籤清單為 Obsidian Markdown
   exportMarkdownAllBtn.addEventListener("click", async () => {
     const filtered = getFilteredBookmarks();
     if (!filtered.length) {
@@ -407,7 +892,6 @@ function bindEvents() {
     showToast(`📝 已將 ${filtered.length} 筆書籤整理成 Obsidian 格式並複製！`);
   });
 
-  // 匯出 JSON 備份
   exportJsonBtn.addEventListener("click", () => {
     if (!state.bookmarks.length) {
       showToast("目前還沒有書籤可供匯出");
@@ -428,12 +912,11 @@ function bindEvents() {
     showToast("📤 已下載書籤備份檔 (.json)");
   });
 
-  // 匯入 JSON 備份
   importJsonInput.addEventListener("change", (e) => {
     const file = e.target.files?.[0];
     if (!file) return;
     const reader = new FileReader();
-    reader.onload = (ev) => {
+    reader.onload = async (ev) => {
       try {
         const data = JSON.parse(ev.target.result);
         const importedList = Array.isArray(data) ? data : data.bookmarks;
@@ -459,9 +942,10 @@ function bindEvents() {
         });
 
         saveCategories();
-        persistBookmarks();
+        await persistBookmarks();
         renderCategorySelect();
         renderBookmarkLibrary();
+        triggerAutoPushToVault();
         showToast(`📥 匯入成功！共處理 ${importedList.length} 筆書籤`);
       } catch {
         alert("匯入失敗：請確認選擇的是正確的 JSON 備份檔。");
@@ -471,23 +955,24 @@ function bindEvents() {
     reader.readAsText(file);
   });
 
-  // 清空所有書籤紀錄
-  clearHistoryBtn.addEventListener("click", () => {
+  clearHistoryBtn.addEventListener("click", async () => {
     if (!state.bookmarks.length) return;
-    if (!confirm("確定要清空所有儲存的網站書籤嗎？（建議可先點「備份」）")) return;
+    if (!confirm("確定要清空本機所有儲存的網站書籤嗎？（建議可先點「備份」）")) return;
     state.bookmarks = [];
     localStorage.removeItem(STORAGE_KEYS.BOOKMARKS);
     localStorage.removeItem(STORAGE_KEYS.LEGACY_HISTORY);
+    try {
+      await idbSet(STORAGE_KEYS.BOOKMARKS, []);
+    } catch {}
     renderBookmarkLibrary();
-    showToast("🗑️ 已清空所有書籤");
+    showToast("🗑️ 已清空本機書籤");
   });
 }
 
 // ==================================================
-// 多重雲端暫存空間分享系統 (防單一故障自動切換)
+// 情境一：多重雲端暫存空間分享系統 (防單一故障自動切換)
 // ==================================================
 const SHARE_PROVIDERS = {
-  // 1. Pastes.dev (支援大檔案與縮圖，Cloudflare CDN)
   pastesdev: {
     name: "Pastes.dev 雲端",
     prefix: "p_",
@@ -509,7 +994,6 @@ const SHARE_PROVIDERS = {
     }
   },
 
-  // 2. dpaste.com (支援 365 天長效保存)
   dpaste: {
     name: "dpaste (365天長效)",
     prefix: "d_",
@@ -537,7 +1021,6 @@ const SHARE_PROVIDERS = {
     }
   },
 
-  // 3. JSONBlob (3 天短效暫存)
   jsonblob: {
     name: "JSONBlob (3天暫存)",
     prefix: "j_",
@@ -564,14 +1047,12 @@ const SHARE_PROVIDERS = {
   }
 };
 
-// 產生分享連結 (支援指定空間或 auto 自動容錯切換)
 async function createAndShowShareLink(items, packTitle = "WebLinkSnap 書籤分享") {
   const mode = shareProviderSelect.value || "auto";
   shareFilteredBtn.disabled = true;
   const origBtnText = shareFilteredBtn.innerHTML;
   shareFilteredBtn.innerHTML = "⏳ 正在上傳產生分享連結...";
 
-  // 建立精簡版分享資料結構
   const payload = {
     title: packTitle,
     sharedAt: formatNow(),
@@ -599,17 +1080,14 @@ async function createAndShowShareLink(items, packTitle = "WebLinkSnap 書籤分�
       return;
     }
 
-    // 決定嘗試順序：若選 auto，依序嘗試 pastesdev -> dpaste -> jsonblob；若選特定空間失敗時也會自動備援！
     const order =
       mode === "auto"
         ? ["pastesdev", "dpaste", "jsonblob"]
         : [mode, ...["pastesdev", "dpaste", "jsonblob"].filter((k) => k !== mode)];
 
-    let lastErr = null;
     for (const providerKey of order) {
       const provider = SHARE_PROVIDERS[providerKey];
       try {
-        // dpaste 免費版對超大請求有限制，若選 dpaste 且含大量 Base64 縮圖超過 250KB，自動建立無縮圖輕量版
         let toSend = payload;
         if (providerKey === "dpaste" && JSON.stringify(payload).length > 240000) {
           toSend = {
@@ -625,12 +1103,9 @@ async function createAndShowShareLink(items, packTitle = "WebLinkSnap 書籤分�
           : `存放空間：${provider.name}`;
         displayGeneratedShareUrl(shareUrl, label);
         return;
-      } catch (err) {
-        lastErr = err;
-      }
+      } catch {}
     }
 
-    // 萬一所有外部 API 都無法連線，終極保底使用網址直接編碼
     const stripThumbPayload = {
       ...payload,
       items: payload.items.slice(0, 40).map((it) => ({ ...it, thumb: "" }))
@@ -652,7 +1127,6 @@ function displayGeneratedShareUrl(url, providerLabel) {
   showToast(`🔗 分享連結已產生並自動複製！(${providerLabel})`);
 }
 
-// 檢查網址是否帶有 ?s=xxxx 或 #share=xxxx 分享參數
 async function checkIncomingShareLink() {
   const params = new URLSearchParams(window.location.search);
   const shareCode = params.get("s");
@@ -688,7 +1162,7 @@ async function checkIncomingShareLink() {
       window.scrollTo({ top: sharedViewBanner.offsetTop - 12, behavior: "smooth" });
       showToast(`📬 已載入 ${data.items.length} 筆分享書籤！`);
     }
-  } catch (err) {
+  } catch {
     alert("無法載入此分享連結，可能該暫存連結已過期或代號不正確。");
   } finally {
     hideStatus();
@@ -699,7 +1173,6 @@ function exitSharedMode() {
   state.isViewingShared = false;
   state.sharedBookmarks = [];
   sharedViewBanner.classList.add("hidden");
-  // 清除網址上的 ?s= 與 #share=
   const cleanUrl = window.location.pathname;
   window.history.replaceState({}, document.title, cleanUrl);
   renderBookmarkLibrary();
@@ -899,7 +1372,7 @@ async function processUrl(rawInput) {
   resultSection.classList.remove("hidden");
 
   await selectImageSource("none");
-  upsertCurrentToBookmarks();
+  await upsertCurrentToBookmarks();
 
   hideStatus();
   fetchBtn.disabled = false;
@@ -1057,7 +1530,7 @@ async function handleCustomImagePaste(file) {
     sourceBadge.textContent = "已套用剪貼簿貼上的截圖";
 
     await refreshBase64FromCurrentImage();
-    upsertCurrentToBookmarks();
+    await upsertCurrentToBookmarks();
     showToast("🖼️ 已套用剪貼簿截圖並更新書籤！");
   };
   reader.readAsDataURL(file);
@@ -1222,18 +1695,29 @@ function generateBatchObsidianMarkdown(items) {
   return out;
 }
 
-// ===============================
-// 書籤庫管理
-// ===============================
-function loadBookmarks() {
+// ==================================================
+// 書籤庫管理 (IndexedDB 優先，相容遷移 localStorage)
+// ==================================================
+async function loadBookmarksFromStorage() {
+  try {
+    // 1. 優先從大容量 IndexedDB 讀取
+    const idbData = await idbGet(STORAGE_KEYS.BOOKMARKS);
+    if (Array.isArray(idbData) && idbData.length > 0) {
+      state.bookmarks = idbData;
+      return;
+    }
+  } catch {}
+
+  // 2. 相容遷移舊版 localStorage 資料至 IndexedDB
   try {
     const saved = JSON.parse(localStorage.getItem(STORAGE_KEYS.BOOKMARKS) || "null");
-    if (Array.isArray(saved)) {
+    if (Array.isArray(saved) && saved.length > 0) {
       state.bookmarks = saved;
+      await persistBookmarks();
       return;
     }
     const legacy = JSON.parse(localStorage.getItem(STORAGE_KEYS.LEGACY_HISTORY) || "[]");
-    if (Array.isArray(legacy) && legacy.length) {
+    if (Array.isArray(legacy) && legacy.length > 0) {
       state.bookmarks = legacy.map((item, idx) => ({
         id: "bm_" + (Date.now() - idx * 1000),
         url: item.url,
@@ -1245,27 +1729,26 @@ function loadBookmarks() {
         thumb: item.thumb || "",
         currentImageUrl: item.url
       }));
-      persistBookmarks();
+      await persistBookmarks();
     }
   } catch {
     state.bookmarks = [];
   }
 }
 
-function persistBookmarks() {
+async function persistBookmarks() {
+  // 1. 寫入大容量 IndexedDB（支援幾百個網站 + 完整 Base64 縮圖）
+  try {
+    await idbSet(STORAGE_KEYS.BOOKMARKS, state.bookmarks);
+  } catch {}
+
+  // 2. 同步一份至 localStorage 作為雙重保險
   try {
     localStorage.setItem(STORAGE_KEYS.BOOKMARKS, JSON.stringify(state.bookmarks));
-  } catch {
-    if (state.bookmarks.length > 40) {
-      state.bookmarks = state.bookmarks.slice(0, 40);
-      try {
-        localStorage.setItem(STORAGE_KEYS.BOOKMARKS, JSON.stringify(state.bookmarks));
-      } catch {}
-    }
-  }
+  } catch {}
 }
 
-function upsertCurrentToBookmarks() {
+async function upsertCurrentToBookmarks() {
   if (!state.url) return;
 
   const entry = {
@@ -1275,7 +1758,7 @@ function upsertCurrentToBookmarks() {
     category: state.category || "未分類",
     description: state.description || "",
     capturedAt: state.capturedAt || formatNow(),
-    timestamp: state.timestamp || Date.now(),
+    timestamp: Date.now(),
     thumb: state.activeSource === "none" ? "" : state.base64Data,
     currentImageUrl: state.activeSource === "none" ? "" : state.currentImageUrl,
     ogUrl: state.sources.og || ""
@@ -1288,9 +1771,10 @@ function upsertCurrentToBookmarks() {
     state.bookmarks.unshift(entry);
   }
 
-  persistBookmarks();
+  await persistBookmarks();
   renderBookmarkLibrary();
   saveStatusHint.textContent = `✅ 已同步儲存至「${entry.category}」分類 (${formatNow().slice(11)})`;
+  triggerAutoPushToVault();
 }
 
 let syncTimer = null;
@@ -1475,18 +1959,18 @@ function renderBookmarkLibrary() {
       setTimeout(() => (btn.innerHTML = orig), 1800);
     });
 
-    // 單筆書籤產生分享連結
     card.querySelector('[data-action="share-one"]').addEventListener("click", async () => {
       await createAndShowShareLink([item], `分享網站：${item.title || item.url}`);
       window.scrollTo({ top: shareResultBar.offsetTop - 100, behavior: "smooth" });
     });
 
-    card.querySelector('[data-action="delete"]').addEventListener("click", () => {
+    card.querySelector('[data-action="delete"]').addEventListener("click", async () => {
       if (state.isViewingShared) {
         state.sharedBookmarks = state.sharedBookmarks.filter((b) => b.id !== item.id && b.url !== item.url);
       } else {
         state.bookmarks = state.bookmarks.filter((b) => b.id !== item.id && b.url !== item.url);
-        persistBookmarks();
+        await persistBookmarks();
+        triggerAutoPushToVault();
       }
       renderBookmarkLibrary();
       showToast("🗑️ 已移除該筆書籤");

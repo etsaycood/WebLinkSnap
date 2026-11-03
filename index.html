@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0" />
-  <title>WebLinkSnap — 網址去追蹤、書籤庫與 Obsidian 轉換器</title>
+  <title>WebLinkSnap — 網址去追蹤、私密雲端書籤庫與 Obsidian 轉換器</title>
   <link rel="stylesheet" href="style.css" />
 </head>
 <body class="mobile-stream-mode">
@@ -13,10 +13,13 @@
         <span class="logo-icon">📎</span>
         <div>
           <h1>WebLinkSnap</h1>
-          <p class="subtitle">免 Token・自動去除網址追蹤、分類管理書籤，一鍵產生分享連結或貼入 Obsidian</p>
+          <p class="subtitle">免重複輸入 Token・自動去追蹤、私密雲端存縮圖，一鍵分享或貼入 Obsidian</p>
         </div>
       </div>
       <div class="header-actions">
+        <button type="button" id="privateVaultToggleBtn" class="btn-vault" title="設定或檢視 GitHub 私密長期保存保險箱">
+          🔒 私密雲端 (<span id="vaultStatusShort">未綁定</span>)
+        </button>
         <button type="button" id="layoutToggleBtn" class="btn-secondary btn-sm" title="切換長條閱讀或雙欄寬版">
           🖥️ 切換寬版雙欄
         </button>
@@ -25,6 +28,114 @@
         </a>
       </div>
     </header>
+
+    <!-- 情境二：GitHub 私密長期保存保險箱設定面板 (預設摺疊，設定一次後永久記住) -->
+    <section id="privateVaultPanel" class="card vault-panel hidden">
+      <div class="panel-header">
+        <div class="vault-title-row">
+          <h2>🔒 個人私密長期保存（GitHub Secret Gist / 私人儲存庫）</h2>
+          <span id="vaultSyncBadge" class="badge">僅保存在您的設備與私人 GitHub，外人無法存取</span>
+        </div>
+        <button type="button" id="closeVaultPanelBtn" class="btn-secondary btn-xs">✕ 收起面板</button>
+      </div>
+
+      <p class="vault-intro">
+        💡 <strong>初次設定一次即可永久記住：</strong>系統已升級為 <code>IndexedDB</code> 大容量資料庫（可存上千筆網站與縮圖），綁定後每次新增網站或縮圖都會<strong>自動加密同步至您的私人 GitHub 空間</strong>，其他人打開公開網站完全看不到您的私人資料。
+      </p>
+
+      <div class="form-row-2col">
+        <div class="field-group">
+          <label for="vaultModeSelect">私密存放方式</label>
+          <select id="vaultModeSelect">
+            <option value="gist" selected>🔐 GitHub Secret Gist（推薦：免手動建庫，自動建立私密檔）</option>
+            <option value="repo">📁 GitHub Private Repo（存入您的私人儲存庫檔案）</option>
+          </select>
+        </div>
+
+        <div class="field-group">
+          <div class="label-row">
+            <label for="vaultTokenInput">GitHub Personal Access Token (只存於您本機)</label>
+            <a
+              href="https://github.com/settings/tokens/new?description=WebLinkSnap-Private-Vault&scopes=gist,repo"
+              target="_blank"
+              rel="noopener noreferrer"
+              class="token-helper-link"
+            >
+              🔑 點此一鍵前往 GitHub 產生永久 Token ↗
+            </a>
+          </div>
+          <input
+            type="password"
+            id="vaultTokenInput"
+            placeholder="貼上 ghp_... 開頭的 Token（設定一次即永久記住）"
+            autocomplete="off"
+          />
+        </div>
+      </div>
+
+      <!-- Secret Gist 設定欄位 -->
+      <div id="vaultGistFields" class="field-group">
+        <label for="vaultGistIdInput">Secret Gist ID（初次使用請留空，系統會自動幫您建立新的私密 Gist！）</label>
+        <input
+          type="text"
+          id="vaultGistIdInput"
+          placeholder="留空即可自動建立；若要跨手機/電腦同步同一份書籤，會自動帶入或貼上 Gist ID"
+          autocomplete="off"
+        />
+      </div>
+
+      <!-- Private Repo 設定欄位 -->
+      <div id="vaultRepoFields" class="form-row-2col hidden">
+        <div class="field-group">
+          <label for="vaultRepoInput">私人儲存庫名稱 (帳號/Repo名稱)</label>
+          <input
+            type="text"
+            id="vaultRepoInput"
+            placeholder="例如：etsaycood/WebLinkSnap-Private"
+            value="etsaycood/WebLinkSnap-Private"
+          />
+        </div>
+        <div class="field-group">
+          <label for="vaultPathInput">儲存檔案路徑</label>
+          <input
+            type="text"
+            id="vaultPathInput"
+            placeholder="weblinksnap-vault.json"
+            value="weblinksnap-vault.json"
+          />
+        </div>
+      </div>
+
+      <div class="vault-options-row">
+        <label class="clean-toggle-label">
+          <input type="checkbox" id="vaultAutoSyncToggle" checked />
+          <span>⚡ 啟用全自動背景同步（打開網頁自動拉取最新資料，新增/修改書籤與縮圖時自動上傳私密空間）</span>
+        </label>
+      </div>
+
+      <div class="vault-action-bar">
+        <button type="button" id="vaultSaveAndPushBtn" class="btn-primary btn-sm">
+          ☁️ 儲存綁定並立即上傳備份 (Push)
+        </button>
+        <button type="button" id="vaultPullBtn" class="btn-secondary btn-sm">
+          📥 從私密雲端拉取同步 (Pull)
+        </button>
+        <a id="vaultActualFileLink" href="#" target="_blank" rel="noopener noreferrer" class="btn-secondary btn-sm hidden">
+          🔍 查看我的 GitHub 私密原始檔 ↗
+        </a>
+        <button type="button" id="vaultCopyBindCodeBtn" class="btn-secondary btn-sm" title="複製綁定資訊以便在手機或另一台電腦快速同步">
+          📱 複製跨裝置快速綁定碼
+        </button>
+        <button type="button" id="vaultPasteBindCodeBtn" class="btn-secondary btn-sm" title="貼上從電腦複製的快速綁定碼">
+          📋 貼上綁定碼
+        </button>
+        <button type="button" id="vaultDisconnectBtn" class="btn-text-danger">
+          解除綁定
+        </button>
+      </div>
+
+      <div id="vaultLastSyncInfo" class="vault-sync-info">尚未連線至私密雲端</div>
+    </section>
 
     <!-- 當點開別人分享的 ?s=xxxx 連結時顯示的接收橫幅 -->
     <section id="sharedViewBanner" class="card shared-banner hidden">
@@ -122,7 +233,7 @@
         <!-- 截圖來源切換（預設不擷取圖片，需要再點選） -->
         <div class="field-group">
           <div class="label-row">
-            <label>網站圖片 / 截圖（預設不擷取，需要時點選載入）</label>
+            <label>網站圖片 / 截圖（預設不擷取，需要時點選載入；會一併存入私密書籤庫）</label>
             <span id="imgSizeBadge" class="size-badge">純文字模式（無圖片）</span>
           </div>
           <div class="source-tabs" id="sourceTabs">
@@ -153,7 +264,7 @@
                 <input type="radio" name="imageMode" value="base64" checked />
                 <div>
                   <div class="radio-title">📦 Base64 純文字內嵌（推薦）</div>
-                  <div class="radio-desc">將截圖直接編成文字存入筆記，永久離線可用、永不破圖</div>
+                  <div class="radio-desc">將截圖直接編成文字存入筆記與私密庫，永久離線可用、永不破圖</div>
                 </div>
               </label>
               <label class="radio-card" id="modeUrlCard">
@@ -191,7 +302,7 @@
           <button type="button" id="saveBookmarkBtn" class="btn-save-bookmark">
             ⭐ 儲存 / 更新至書籤庫
           </button>
-          <span id="saveStatusHint" class="save-hint">修改名稱、分類或說明後會自動同步儲存</span>
+          <span id="saveStatusHint" class="save-hint">修改名稱、分類、說明或縮圖後會自動同步儲存</span>
         </div>
       </section>
 
@@ -227,14 +338,17 @@
       </section>
     </main>
 
-    <!-- 書籤庫區塊 (含多重暫存空間選擇與一鍵分享連結) -->
+    <!-- 書籤庫區塊 -->
     <section id="bookmarkSection" class="card bookmark-section">
       <div class="bookmark-header">
         <div class="bookmark-title-group">
           <h2>📚 網站書籤庫</h2>
-          <span class="bookmark-subtitle">支援依分類、網站說明與標題快速搜尋，並可一鍵產生分享連結傳給他人</span>
+          <span class="bookmark-subtitle">支援依分類、網站說明與標題快速搜尋，可綁定 GitHub 私密長期保存或產生臨時分享連結</span>
         </div>
         <div class="bookmark-tools">
+          <button type="button" id="quickVaultSyncBtn" class="btn-secondary btn-sm" title="立即與 GitHub 私密空間同步">
+            🔒 私密同步
+          </button>
           <button type="button" id="viewModeToggleBtn" class="btn-secondary btn-sm" title="切換長條閱讀清單或縮圖網格">
             🗂️ 切換網格檢視
           </button>
@@ -252,11 +366,11 @@
         </div>
       </div>
 
-      <!-- 雲端暫存分享工具列 (多空間選單 + 防單一故障自動備援) -->
+      <!-- 情境一：雲端暫存分享工具列 (給一般使用者 / 臨時分享給朋友) -->
       <div class="share-cloud-box">
         <div class="share-cloud-controls">
           <div class="share-provider-wrap">
-            <label for="shareProviderSelect">☁️ 分享暫存空間（防單點故障）：</label>
+            <label for="shareProviderSelect">☁️ 臨時分享給他人（公開暫存空間・防單點故障）：</label>
             <select id="shareProviderSelect">
               <option value="auto" selected>🔄 自動智慧備援（推薦：遇故障自動切換下一個空間）</option>
               <option value="pastesdev">⚡ Pastes.dev 雲端暫存（支援大檔案與縮圖，最快）</option>
@@ -266,11 +380,10 @@
             </select>
           </div>
           <button type="button" id="shareFilteredBtn" class="btn-share-cloud">
-            📤 產生目前書籤清單的分享連結
+            📤 產生目前清單的分享連結
           </button>
         </div>
 
-        <!-- 產生的分享連結顯示區 -->
         <div id="shareResultBar" class="share-result-bar hidden">
           <div class="share-result-info">
             <span id="shareProviderBadge" class="badge">已上傳至雲端</span>

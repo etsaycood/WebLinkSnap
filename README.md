@@ -65,14 +65,29 @@ WebLinkSnap 支援將「單筆書籤」或「目前篩選的整批書籤清單�
 
 ---
 
+## 🔒 個人私密長期保存（GitHub Secret Gist / Private Repo ＋ IndexedDB）
+
+針對您自己長期累積的**幾百個網站書籤與 Base64 縮圖**，WebLinkSnap 內建高隱私、大容量的長期保存機制，**資料絕對不會公開在公開網頁上**：
+
+1. **🗄️ 本機 `IndexedDB` 大容量資料庫 (`WebLinkSnapVaultDB`)**：
+   - 突破傳統 `localStorage` 5MB 限制，可在本機儲存數千個網站與高畫質壓縮縮圖。
+2. **☁️ GitHub 私密雲端自動同步（設定一次，永久記住免重複輸入）**：
+   - 點擊網頁右上角 **「🔒 私密雲端」** 開啟設定面板，支援兩種 GitHub 私密空間：
+     - **🔐 GitHub Secret Gist（推薦）**：初次使用只需貼上一次 Token（面板內附有一鍵產生 Token 連結），Gist ID 留空並點擊 **「☁️ 儲存綁定並立即上傳備份」**，系統會自動在您的 GitHub 建立一個不公開的私密檔案 `weblinksnap-vault.json`。
+     - **📁 GitHub Private Repo（私人儲存庫）**：將書籤與縮圖存入您指定的私人儲存庫（如 `etsaycood/WebLinkSnap-Private`），若該私人儲存庫尚未建立，系統亦會自動為您建立 Private Repo。
+   - **⚡ 全自動背景同步**：綁定一次後，Token 與設定會永久保存在您自己的設備瀏覽器中。每次打開網頁會自動拉取最新資料，新增、修改書籤或加入縮圖時也會自動在背景上傳備份。
+   - **📱 跨裝置快速綁定碼**：在電腦綁定完成後，點一下 **「📱 複製跨裝置快速綁定碼」** 傳到手機，在手機點 **「📋 貼上綁定碼」** 即可 1 秒完成跨裝置私密同步！
+
+---
+
 ## 💾 本機資料儲存位置與備份方式
 
-1. **瀏覽器本機儲存 (`localStorage`)**：
-   - 您日常新增的書籤預設儲存在您自己設備的瀏覽器 `localStorage`（鍵值為 `weblink_obsidian_bookmarks_v2` 與 `weblink_obsidian_categories`），**不會自動公開上傳，保障個人隱私**。
-   - 可在瀏覽器按 `F12` ➔ `Application` ➔ `Local Storage` 直接檢視原始內容。
+1. **瀏覽器本機儲存 (`IndexedDB` & `localStorage`)**：
+   - 您日常新增的書籤與縮圖儲存在設備瀏覽器的 `IndexedDB` (`WebLinkSnapVaultDB`) 與 `localStorage`，**不會自動公開上傳，保障個人隱私**。
+   - 可在瀏覽器按 `F12` ➔ `Application` ➔ `IndexedDB` 或 `Local Storage` 直接檢視原始內容。
    - Windows 底層資料庫目錄：
-     - **Chrome**：`%LocalAppData%\Google\Chrome\User Data\Default\Local Storage\leveldb`
-     - **Edge**：`%LocalAppData%\Microsoft\Edge\User Data\Default\Local Storage\leveldb`
+     - **Chrome**：`%LocalAppData%\Google\Chrome\User Data\Default\IndexedDB`
+     - **Edge**：`%LocalAppData%\Microsoft\Edge\User Data\Default\IndexedDB`
 2. **實體 JSON 備份匯出 / 匯入**：
    - 點擊書籤庫右上角的 **「📤 備份」**，即可將所有分類、書籤與縮圖下載為獨立的 `weblinksnap-bookmarks-YYYY-MM-DD.json` 實體檔案保存於電腦或私人雲端硬碟。
    - 點擊 **「📥 匯入」** 即可隨時從 `.json` 備份檔完整還原。
