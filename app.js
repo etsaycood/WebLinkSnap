@@ -1,4 +1,4 @@
-// WebLinkSnap - 免 Token 網址去追蹤、分類書籤庫與 Obsidian Markdown 轉換器
+// WebLinkSnap - 免 Token 網址去追蹤、分類書籤庫、多雲端備援分享與 Obsidian 轉換器
 
 const DEFAULT_CATEGORIES = [
   "未分類",
@@ -18,16 +18,12 @@ const STORAGE_KEYS = {
 
 // 常見追蹤參數黑名單
 const TRACKING_PARAMS_EXACT = new Set([
-  // 廣告與分析追蹤
   "fbclid", "gclid", "gclsrc", "dclid", "msclkid", "twclid", "ttclid", "yclid",
   "wickedid", "rb_clickid", "s_kwcid", "mc_cid", "mc_eid", "mkt_tok", "vero_id",
   "oly_enc_id", "oly_anon_id", "guccounter", "guce_referrer", "guce_referrer_sig",
-  // 社群平台 (IG / Threads / FB / X / Reddit)
   "igshid", "igsh", "ref", "ref_src", "ref_url", "rdt", "share_id", "isappinstalled", "from",
-  // 影音平台 (YouTube / Spotify / Bilibili)
   "si", "feature", "pp", "ab_channel", "spm_id_from", "vd_source",
   "share_source", "share_medium", "share_plat", "share_session_id", "share_tag", "share_times", "unique_k",
-  // 電商平台 (Shopee / Taobao / Amazon)
   "spm", "scm", "sp_atk", "xptdk", "mmp_pid", "uls_trackid",
   "pd_rd_r", "pd_rd_w", "pd_rd_wg", "pf_rd_p", "pf_rd_r", "pf_rd_s", "pf_rd_t", "pf_rd_i", "pf_rd_m",
   "qid", "sr", "crid", "sprefix", "dib", "dib_tag", "psc", "smid", "spLa", "linkCode", "camp", "creative", "creativeASIN"
@@ -51,23 +47,32 @@ const state = {
     mshots: "",
     custom: ""
   },
-  activeSource: "none",   // 預設不擷取圖片 ('none' | 'og' | 'screenshot' | 'mshots' | 'custom')
+  activeSource: "none",   // 預設不擷取圖片
   base64Data: "",
   currentImageUrl: "",
-  imageMode: "base64",    // 'base64' | 'url'
-  template: "standard",   // 預設為標準 Markdown ('standard' | 'compact' | 'callout' | 'reflink')
+  imageMode: "base64",
+  template: "standard",   // 預設為標準 Markdown
   // 書籤與版面狀態
   filterCategory: "ALL",
   searchQuery: "",
   sortBy: "newest",
-  viewMode: "stream",     // 'stream' (長條閱讀) | 'grid' (網格)
+  viewMode: "stream",
   categories: [],
-  bookmarks: []
+  bookmarks: [],
+  // 分享檢視模式狀態
+  isViewingShared: false,
+  sharedBookmarks: []
 };
 
 // DOM 元素
 const layoutToggleBtn = document.getElementById("layoutToggleBtn");
 const viewModeToggleBtn = document.getElementById("viewModeToggleBtn");
+const sharedViewBanner = document.getElementById("sharedViewBanner");
+const sharedBannerTitle = document.getElementById("sharedBannerTitle");
+const sharedBannerMeta = document.getElementById("sharedBannerMeta");
+const importSharedBtn = document.getElementById("importSharedBtn");
+const exitSharedViewBtn = document.getElementById("exitSharedViewBtn");
+
 const captureForm = document.getElementById("captureForm");
 const urlInput = document.getElementById("urlInput");
 const pasteBtn = document.getElementById("pasteBtn");
@@ -104,8 +109,16 @@ const openObsidianBtn = document.getElementById("openObsidianBtn");
 const markdownOutput = document.getElementById("markdownOutput");
 const charCount = document.getElementById("charCount");
 
-// 書籤庫 DOM
+// 書籤庫與分享 DOM
 const totalBookmarkCount = document.getElementById("totalBookmarkCount");
+const shareProviderSelect = document.getElementById("shareProviderSelect");
+const shareFilteredBtn = document.getElementById("shareFilteredBtn");
+const shareResultBar = document.getElementById("shareResultBar");
+const shareProviderBadge = document.getElementById("shareProviderBadge");
+const shareUrlOutput = document.getElementById("shareUrlOutput");
+const copyShareUrlBtn = document.getElementById("copyShareUrlBtn");
+const nativeShareBtn = document.getElementById("nativeShareBtn");
+
 const bookmarkSearchInput = document.getElementById("bookmarkSearchInput");
 const clearSearchBtn = document.getElementById("clearSearchBtn");
 const bookmarkSortSelect = document.getElementById("bookmarkSortSelect");
@@ -121,12 +134,13 @@ const hiddenCanvas = document.getElementById("hiddenCanvas");
 const toastEl = document.getElementById("toast");
 
 // 初始化
-document.addEventListener("DOMContentLoaded", () => {
+document.addEventListener("DOMContentLoaded", async () => {
   loadCategories();
   loadBookmarks();
   renderCategorySelect();
   renderBookmarkLibrary();
   bindEvents();
+  await checkIncomingShareLink();
 });
 
 function bindEvents() {
@@ -141,6 +155,73 @@ function bindEvents() {
     state.viewMode = state.viewMode === "stream" ? "grid" : "stream";
     bookmarkList.className = state.viewMode === "stream" ? "bookmark-stream" : "bookmark-grid";
     viewModeToggleBtn.textContent = state.viewMode === "stream" ? "🗂️ 切換網格檢視" : "📱 切換長條清單";
+  });
+
+  // 分享檢視模式：匯入全部 / 返回自己的書籤庫
+  importSharedBtn.addEventListener("click", () => {
+    if (!state.sharedBookmarks.length) return;
+    let count = 0;
+    state.sharedBookmarks.forEach((item) => {
+      if (!item.url) return;
+      if (item.category && !state.categories.includes(item.category)) {
+        state.categories.push(item.category);
+      }
+      const idx = state.bookmarks.findIndex((b) => b.url === item.url);
+      if (idx >= 0) {
+        state.bookmarks[idx] = { ...state.bookmarks[idx], ...item };
+      } else {
+        state.bookmarks.unshift(item);
+      }
+      count++;
+    });
+    saveCategories();
+    persistBookmarks();
+    exitSharedMode();
+    showToast(`📥 已成功將 ${count} 筆分享書籤收進您的書籤庫！`);
+  });
+
+  exitSharedViewBtn.addEventListener("click", () => {
+    exitSharedMode();
+  });
+
+  // 產生目前篩選清單的雲端分享連結
+  shareFilteredBtn.addEventListener("click", async () => {
+    const items = getFilteredBookmarks();
+    if (!items.length) {
+      showToast("目前沒有可分享的書籤！");
+      return;
+    }
+    const titleLabel =
+      state.filterCategory === "ALL"
+        ? `WebLinkSnap 書籤精選 (${items.length} 筆)`
+        : `「${state.filterCategory}」分類書籤 (${items.length} 筆)`;
+    await createAndShowShareLink(items, titleLabel);
+  });
+
+  // 複製分享連結
+  copyShareUrlBtn.addEventListener("click", async () => {
+    const url = shareUrlOutput.value;
+    if (!url) return;
+    await copyTextToClipboard(url);
+    showToast("🔗 已複製分享連結！可直接貼給朋友");
+  });
+
+  // 手機/系統原生分享選單
+  nativeShareBtn.addEventListener("click", async () => {
+    const url = shareUrlOutput.value;
+    if (!url) return;
+    if (navigator.share) {
+      try {
+        await navigator.share({
+          title: "WebLinkSnap 網站書籤分享",
+          text: "這是我整理好的網站書籤清單，點開即可直接瀏覽與搜尋：",
+          url
+        });
+      } catch {}
+    } else {
+      await copyTextToClipboard(url);
+      showToast("🔗 已複製分享連結！");
+    }
   });
 
   // 表單送出擷取網址
@@ -216,7 +297,7 @@ function bindEvents() {
     showToast("⭐ 已儲存更新至書籤庫！");
   });
 
-  // 切換圖片/截圖來源（預設為 none 不附圖片，點選後才載入）
+  // 切換圖片/截圖來源
   sourceTabs.addEventListener("click", async (e) => {
     const btn = e.target.closest(".tab-btn");
     if (!btn) return;
@@ -235,7 +316,7 @@ function bindEvents() {
     autoSyncCurrentBookmark();
   });
 
-  // 切換圖片保存模式 (Base64 vs URL)
+  // 切換圖片保存模式
   document.querySelectorAll('input[name="imageMode"]').forEach((radio) => {
     radio.addEventListener("change", (e) => {
       state.imageMode = e.target.value;
@@ -265,7 +346,7 @@ function bindEvents() {
     }, 2200);
   });
 
-  // 傳送到 Obsidian (建立新筆記)
+  // 傳送到 Obsidian
   openObsidianBtn.addEventListener("click", () => {
     const safeTitle = (state.title || "網站書籤").replace(/[\\/:*?"<>|]/g, " ").trim().slice(0, 60);
     const content = markdownOutput.value;
@@ -402,13 +483,246 @@ function bindEvents() {
   });
 }
 
+// ==================================================
+// 多重雲端暫存空間分享系統 (防單一故障自動切換)
+// ==================================================
+const SHARE_PROVIDERS = {
+  // 1. Pastes.dev (支援大檔案與縮圖，Cloudflare CDN)
+  pastesdev: {
+    name: "Pastes.dev 雲端",
+    prefix: "p_",
+    async upload(payloadObj) {
+      const res = await fetch("https://api.pastes.dev/post", {
+        method: "POST",
+        headers: { "Content-Type": "text/json" },
+        body: JSON.stringify(payloadObj)
+      });
+      if (!res.ok) throw new Error(`Pastes.dev HTTP ${res.status}`);
+      const data = await res.json();
+      if (!data.key) throw new Error("Pastes.dev 未回傳 key");
+      return `p_${data.key}`;
+    },
+    async download(key) {
+      const res = await fetch(`https://api.pastes.dev/${encodeURIComponent(key)}`);
+      if (!res.ok) throw new Error("無法從 Pastes.dev 讀取分享資料");
+      return await res.json();
+    }
+  },
+
+  // 2. dpaste.com (支援 365 天長效保存)
+  dpaste: {
+    name: "dpaste (365天長效)",
+    prefix: "d_",
+    async upload(payloadObj) {
+      const bodyParams = new URLSearchParams();
+      bodyParams.set("content", JSON.stringify(payloadObj));
+      bodyParams.set("syntax", "json");
+      bodyParams.set("expiry_days", "365");
+
+      const res = await fetch("https://dpaste.com/api/v2/", {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: bodyParams.toString()
+      });
+      if (!res.ok) throw new Error(`dpaste HTTP ${res.status}`);
+      const textUrl = (await res.text()).trim();
+      const id = textUrl.split("/").filter(Boolean).pop();
+      if (!id) throw new Error("dpaste 未回傳有效 ID");
+      return `d_${id}`;
+    },
+    async download(id) {
+      const res = await fetch(`https://dpaste.com/${encodeURIComponent(id)}.txt`);
+      if (!res.ok) throw new Error("無法從 dpaste 讀取分享資料");
+      return await res.json();
+    }
+  },
+
+  // 3. JSONBlob (3 天短效暫存)
+  jsonblob: {
+    name: "JSONBlob (3天暫存)",
+    prefix: "j_",
+    async upload(payloadObj) {
+      const res = await fetch("https://jsonblob.com/api/jsonBlob", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Accept: "application/json"
+        },
+        body: JSON.stringify(payloadObj)
+      });
+      if (!res.ok) throw new Error(`JSONBlob HTTP ${res.status}`);
+      const loc = res.headers.get("Location") || res.headers.get("X-jsonblob") || "";
+      const id = loc.split("/").filter(Boolean).pop();
+      if (!id) throw new Error("JSONBlob 未回傳 ID");
+      return `j_${id}`;
+    },
+    async download(id) {
+      const res = await fetch(`https://jsonblob.com/api/jsonBlob/${encodeURIComponent(id)}`);
+      if (!res.ok) throw new Error("無法從 JSONBlob 讀取分享資料（可能已超過 3 天期限）");
+      return await res.json();
+    }
+  }
+};
+
+// 產生分享連結 (支援指定空間或 auto 自動容錯切換)
+async function createAndShowShareLink(items, packTitle = "WebLinkSnap 書籤分享") {
+  const mode = shareProviderSelect.value || "auto";
+  shareFilteredBtn.disabled = true;
+  const origBtnText = shareFilteredBtn.innerHTML;
+  shareFilteredBtn.innerHTML = "⏳ 正在上傳產生分享連結...";
+
+  // 建立精簡版分享資料結構
+  const payload = {
+    title: packTitle,
+    sharedAt: formatNow(),
+    items: items.map((b) => ({
+      id: b.id,
+      url: b.url,
+      title: b.title,
+      category: b.category || "未分類",
+      description: b.description || "",
+      capturedAt: b.capturedAt || "",
+      timestamp: b.timestamp || Date.now(),
+      thumb: mode === "urlhash" ? "" : b.thumb || ""
+    }))
+  };
+
+  const baseUrl = window.location.origin === "null" || window.location.protocol === "file:"
+    ? "https://etsaycood.github.io/WebLinkSnap/"
+    : `${window.location.origin}${window.location.pathname}`;
+
+  try {
+    if (mode === "urlhash") {
+      const encoded = encodeUtf8Base64(JSON.stringify(payload));
+      const shareUrl = `${baseUrl}#share=${encoded}`;
+      displayGeneratedShareUrl(shareUrl, "網址內嵌 (永久有效)");
+      return;
+    }
+
+    // 決定嘗試順序：若選 auto，依序嘗試 pastesdev -> dpaste -> jsonblob；若選特定空間失敗時也會自動備援！
+    const order =
+      mode === "auto"
+        ? ["pastesdev", "dpaste", "jsonblob"]
+        : [mode, ...["pastesdev", "dpaste", "jsonblob"].filter((k) => k !== mode)];
+
+    let lastErr = null;
+    for (const providerKey of order) {
+      const provider = SHARE_PROVIDERS[providerKey];
+      try {
+        // dpaste 免費版對超大請求有限制，若選 dpaste 且含大量 Base64 縮圖超過 250KB，自動建立無縮圖輕量版
+        let toSend = payload;
+        if (providerKey === "dpaste" && JSON.stringify(payload).length > 240000) {
+          toSend = {
+            ...payload,
+            items: payload.items.map((it) => ({ ...it, thumb: "" }))
+          };
+        }
+        const code = await provider.upload(toSend);
+        const shareUrl = `${baseUrl}?s=${code}`;
+        const usedFallback = mode !== "auto" && providerKey !== mode;
+        const label = usedFallback
+          ? `已自動備援切換至：${provider.name}`
+          : `存放空間：${provider.name}`;
+        displayGeneratedShareUrl(shareUrl, label);
+        return;
+      } catch (err) {
+        lastErr = err;
+      }
+    }
+
+    // 萬一所有外部 API 都無法連線，終極保底使用網址直接編碼
+    const stripThumbPayload = {
+      ...payload,
+      items: payload.items.slice(0, 40).map((it) => ({ ...it, thumb: "" }))
+    };
+    const encoded = encodeUtf8Base64(JSON.stringify(stripThumbPayload));
+    const shareUrl = `${baseUrl}#share=${encoded}`;
+    displayGeneratedShareUrl(shareUrl, "已自動切換為網址內嵌備援");
+  } finally {
+    shareFilteredBtn.disabled = false;
+    shareFilteredBtn.innerHTML = origBtnText;
+  }
+}
+
+function displayGeneratedShareUrl(url, providerLabel) {
+  shareResultBar.classList.remove("hidden");
+  shareProviderBadge.textContent = providerLabel;
+  shareUrlOutput.value = url;
+  copyTextToClipboard(url);
+  showToast(`🔗 分享連結已產生並自動複製！(${providerLabel})`);
+}
+
+// 檢查網址是否帶有 ?s=xxxx 或 #share=xxxx 分享參數
+async function checkIncomingShareLink() {
+  const params = new URLSearchParams(window.location.search);
+  const shareCode = params.get("s");
+  const hash = window.location.hash || "";
+
+  if (!shareCode && !hash.startsWith("#share=")) return;
+
+  showStatus("正在載入他人分享的網站書籤包...", true);
+
+  try {
+    let data = null;
+
+    if (hash.startsWith("#share=")) {
+      const raw = hash.slice("#share=".length);
+      data = JSON.parse(decodeUtf8Base64(raw));
+    } else if (shareCode) {
+      if (shareCode.startsWith("p_")) {
+        data = await SHARE_PROVIDERS.pastesdev.download(shareCode.slice(2));
+      } else if (shareCode.startsWith("d_")) {
+        data = await SHARE_PROVIDERS.dpaste.download(shareCode.slice(2));
+      } else if (shareCode.startsWith("j_")) {
+        data = await SHARE_PROVIDERS.jsonblob.download(shareCode.slice(2));
+      }
+    }
+
+    if (data && Array.isArray(data.items)) {
+      state.isViewingShared = true;
+      state.sharedBookmarks = data.items;
+      sharedViewBanner.classList.remove("hidden");
+      sharedBannerTitle.textContent = `📬 ${data.title || "收到分享的網站書籤包"}`;
+      sharedBannerMeta.textContent = `共 ${data.items.length} 筆網站（分享於 ${data.sharedAt || "近期"}）・您可直接瀏覽搜尋，或一鍵收進自己的書籤庫`;
+      renderBookmarkLibrary();
+      window.scrollTo({ top: sharedViewBanner.offsetTop - 12, behavior: "smooth" });
+      showToast(`📬 已載入 ${data.items.length} 筆分享書籤！`);
+    }
+  } catch (err) {
+    alert("無法載入此分享連結，可能該暫存連結已過期或代號不正確。");
+  } finally {
+    hideStatus();
+  }
+}
+
+function exitSharedMode() {
+  state.isViewingShared = false;
+  state.sharedBookmarks = [];
+  sharedViewBanner.classList.add("hidden");
+  // 清除網址上的 ?s= 與 #share=
+  const cleanUrl = window.location.pathname;
+  window.history.replaceState({}, document.title, cleanUrl);
+  renderBookmarkLibrary();
+}
+
+function encodeUtf8Base64(str) {
+  return btoa(encodeURIComponent(str).replace(/%([0-9A-F]{2})/g, (_, p1) => String.fromCharCode("0x" + p1)));
+}
+
+function decodeUtf8Base64(b64) {
+  return decodeURIComponent(
+    Array.prototype.map
+      .call(atob(b64), (c) => "%" + ("00" + c.charCodeAt(0).toString(16)).slice(-2))
+      .join("")
+  );
+}
+
 // ===============================
 // 網址正規化與「去除追蹤參數」引擎
 // ===============================
 function normalizeAndCleanUrl(rawInput) {
   let text = rawInput.trim();
 
-  // 若從手機 App 複製時夾帶文字（如「分享自小紅書/Threads https://...」），自動提取其中的網址
   const urlMatch = text.match(/https?:\/\/[^\s"'<>]+/i);
   if (urlMatch) {
     text = urlMatch[0];
@@ -426,12 +740,10 @@ function normalizeAndCleanUrl(rawInput) {
     const removedParams = [];
     const host = parsed.hostname.toLowerCase();
 
-    // 1. 檢查並移除所有追蹤參數
     for (const key of Array.from(parsed.searchParams.keys())) {
       const lowerKey = key.toLowerCase();
       const isPrefixMatch = TRACKING_PARAM_PREFIXES.some((prefix) => lowerKey.startsWith(prefix));
       const isExactMatch = TRACKING_PARAMS_EXACT.has(lowerKey);
-      // X (Twitter) 專用分享追蹤碼 ?s=20&t=...
       const isTwitterShare = (host.includes("twitter.com") || host.includes("x.com")) && (lowerKey === "s" || lowerKey === "t");
 
       if (isPrefixMatch || isExactMatch || isTwitterShare) {
@@ -440,13 +752,11 @@ function normalizeAndCleanUrl(rawInput) {
       }
     }
 
-    // 2. Amazon 商品頁移除路徑中的 /ref=...
     if (host.includes("amazon.") && parsed.pathname.includes("/ref=")) {
       parsed.pathname = parsed.pathname.replace(/\/ref=[^/]*$/, "");
       removedParams.push("ref");
     }
 
-    // 3. YouTube 短網址 youtu.be/xxx?si=... 自動清理
     const cleanedUrl = parsed.toString();
 
     if (removedParams.length > 0) {
@@ -552,7 +862,6 @@ async function processUrl(rawInput) {
   };
 
   try {
-    // 預設不帶 &screenshot=true，大幅加快回應速度 (約 0.5 秒完成)
     const microlinkEndpoint = `https://api.microlink.io/?url=${encodeURIComponent(targetUrl)}`;
     const res = await fetch(microlinkEndpoint);
     const json = await res.json();
@@ -572,7 +881,6 @@ async function processUrl(rawInput) {
     sourceBadge.textContent = "備援通道擷取完成";
   }
 
-  // 若書籤庫已有相同網址，沿用其分類與說明
   const existing = state.bookmarks.find((b) => b.url === targetUrl);
   if (existing) {
     state.id = existing.id;
@@ -590,7 +898,6 @@ async function processUrl(rawInput) {
   siteDescriptionInput.value = state.description;
   resultSection.classList.remove("hidden");
 
-  // 預設不擷取圖片 ('none')，需要時使用者再點選
   await selectImageSource("none");
   upsertCurrentToBookmarks();
 
@@ -878,7 +1185,6 @@ function buildMarkdownForItem(item, template = state.template, imageMode = state
       md += `[${refId}]: ${imgValue}\n`;
     }
   } else {
-    // 預設：標準 Markdown (standard)
     md += `### [${title}](${url})\n`;
     md += `- **分類**：${category} (${categoryTag})\n`;
     md += `- **網址**：${url}\n`;
@@ -996,10 +1302,15 @@ function autoSyncCurrentBookmark() {
   }, 350);
 }
 
+function getActiveBookmarkSourceList() {
+  return state.isViewingShared ? state.sharedBookmarks : state.bookmarks;
+}
+
 function getFilteredBookmarks() {
+  const sourceList = getActiveBookmarkSourceList();
   const q = state.searchQuery.toLowerCase();
 
-  const filtered = state.bookmarks.filter((item) => {
+  const filtered = sourceList.filter((item) => {
     const matchCategory = state.filterCategory === "ALL" || (item.category || "未分類") === state.filterCategory;
     if (!matchCategory) return false;
 
@@ -1018,21 +1329,25 @@ function getFilteredBookmarks() {
 }
 
 function renderBookmarkLibrary() {
+  const sourceList = getActiveBookmarkSourceList();
   totalBookmarkCount.textContent = state.bookmarks.length;
 
-  const counts = { ALL: state.bookmarks.length };
-  state.categories.forEach((c) => (counts[c] = 0));
-  state.bookmarks.forEach((b) => {
+  const counts = { ALL: sourceList.length };
+  const activeCats = [...state.categories];
+  activeCats.forEach((c) => (counts[c] = 0));
+  sourceList.forEach((b) => {
     const c = b.category || "未分類";
     counts[c] = (counts[c] || 0) + 1;
-    if (!state.categories.includes(c)) state.categories.push(c);
+    if (!activeCats.includes(c)) activeCats.push(c);
   });
 
   categoryFilterBar.innerHTML = "";
-  categoryFilterBar.appendChild(createCategoryPill("ALL", "全部書籤", counts.ALL));
+  categoryFilterBar.appendChild(createCategoryPill("ALL", state.isViewingShared ? "分享包全部" : "全部書籤", counts.ALL));
 
-  state.categories.forEach((cat) => {
-    categoryFilterBar.appendChild(createCategoryPill(cat, cat, counts[cat] || 0));
+  activeCats.forEach((cat) => {
+    if (counts[cat] > 0 || !state.isViewingShared) {
+      categoryFilterBar.appendChild(createCategoryPill(cat, cat, counts[cat] || 0));
+    }
   });
 
   const filtered = getFilteredBookmarks();
@@ -1040,7 +1355,7 @@ function renderBookmarkLibrary() {
 
   if (!filtered.length) {
     emptyBookmarkState.classList.remove("hidden");
-    if (state.bookmarks.length === 0) {
+    if (sourceList.length === 0) {
       emptyStateText.textContent = "目前還沒有儲存的網站書籤，在上方貼上網址擷取後就會自動收納在這裡！";
     } else {
       emptyStateText.textContent = `找不到符合「${state.searchQuery || state.filterCategory}」的網站書籤。`;
@@ -1086,8 +1401,11 @@ function renderBookmarkLibrary() {
         <button type="button" class="bm-btn bm-btn-copy" data-action="copy" title="一鍵複製此網站的 Obsidian Markdown">
           📋 複製 Markdown
         </button>
+        <button type="button" class="bm-btn" data-action="share-one" title="產生此單筆網站的分享連結">
+          📤 分享連結
+        </button>
         <button type="button" class="bm-btn" data-action="edit" title="載入上方編輯區修改分類、說明或補抓截圖">
-          ✏️ 編輯 / 補截圖
+          ✏️ 編輯
         </button>
         <a class="bm-btn" href="${escapeHtml(item.url)}" target="_blank" rel="noopener noreferrer">
           🔗 開啟
@@ -1157,9 +1475,19 @@ function renderBookmarkLibrary() {
       setTimeout(() => (btn.innerHTML = orig), 1800);
     });
 
+    // 單筆書籤產生分享連結
+    card.querySelector('[data-action="share-one"]').addEventListener("click", async () => {
+      await createAndShowShareLink([item], `分享網站：${item.title || item.url}`);
+      window.scrollTo({ top: shareResultBar.offsetTop - 100, behavior: "smooth" });
+    });
+
     card.querySelector('[data-action="delete"]').addEventListener("click", () => {
-      state.bookmarks = state.bookmarks.filter((b) => b.id !== item.id && b.url !== item.url);
-      persistBookmarks();
+      if (state.isViewingShared) {
+        state.sharedBookmarks = state.sharedBookmarks.filter((b) => b.id !== item.id && b.url !== item.url);
+      } else {
+        state.bookmarks = state.bookmarks.filter((b) => b.id !== item.id && b.url !== item.url);
+        persistBookmarks();
+      }
       renderBookmarkLibrary();
       showToast("🗑️ 已移除該筆書籤");
     });

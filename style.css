@@ -618,6 +618,125 @@ kbd {
 }
 
 /* ==========================================
+   分享檢視橫幅 與 雲端暫存分享區塊
+   ========================================== */
+.shared-banner {
+  background: linear-gradient(135deg, rgba(124, 58, 237, 0.22), rgba(16, 185, 129, 0.14));
+  border-color: var(--accent-primary);
+}
+
+.shared-banner-top {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.shared-banner-info {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.shared-icon {
+  font-size: 1.8rem;
+}
+
+.shared-banner-info h2 {
+  font-size: 1.08rem;
+  font-weight: 700;
+}
+
+.shared-meta {
+  font-size: 0.84rem;
+  color: #cbd5e1;
+}
+
+.shared-banner-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.share-cloud-box {
+  background: rgba(124, 58, 237, 0.08);
+  border: 1px solid rgba(124, 58, 237, 0.3);
+  border-radius: 10px;
+  padding: 12px 14px;
+  margin-bottom: 14px;
+}
+
+.share-cloud-controls {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.share-provider-wrap {
+  flex: 1;
+  min-width: 220px;
+}
+
+.share-provider-wrap label {
+  display: block;
+  font-size: 0.8rem;
+  color: #c4b5fd;
+  margin-bottom: 4px;
+  font-weight: 600;
+}
+
+.btn-share-cloud {
+  background: var(--accent-primary);
+  color: #fff;
+  padding: 10px 16px;
+  font-size: 0.9rem;
+  white-space: nowrap;
+}
+
+.btn-share-cloud:hover:not(:disabled) {
+  background: var(--accent-hover);
+}
+
+.btn-share-cloud:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.share-result-bar {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px dashed rgba(124, 58, 237, 0.35);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.share-result-info {
+  flex: 1;
+  min-width: 220px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.share-result-info input {
+  flex: 1;
+  font-family: Consolas, monospace;
+  font-size: 0.85rem;
+  padding: 7px 10px;
+}
+
+.share-result-actions {
+  display: flex;
+  gap: 8px;
+}
+
+/* ==========================================
    書籤庫區塊 (預設：手機長條垂直閱讀流)
    ========================================== */
 .bookmark-header {

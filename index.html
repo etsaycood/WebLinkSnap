@@ -13,7 +13,7 @@
         <span class="logo-icon">📎</span>
         <div>
           <h1>WebLinkSnap</h1>
-          <p class="subtitle">免 Token・自動去除網址追蹤、分類管理書籤，一鍵轉成純文字貼入 Obsidian</p>
+          <p class="subtitle">免 Token・自動去除網址追蹤、分類管理書籤，一鍵產生分享連結或貼入 Obsidian</p>
         </div>
       </div>
       <div class="header-actions">
@@ -25,6 +25,27 @@
         </a>
       </div>
     </header>
+
+    <!-- 當點開別人分享的 ?s=xxxx 連結時顯示的接收橫幅 -->
+    <section id="sharedViewBanner" class="card shared-banner hidden">
+      <div class="shared-banner-top">
+        <div class="shared-banner-info">
+          <span class="shared-icon">📬</span>
+          <div>
+            <h2 id="sharedBannerTitle">正在檢視分享的網站書籤包</h2>
+            <p id="sharedBannerMeta" class="shared-meta">共 0 筆網站書籤・可直接瀏覽、搜尋或匯入您的書籤庫</p>
+          </div>
+        </div>
+        <div class="shared-banner-actions">
+          <button type="button" id="importSharedBtn" class="btn-primary btn-sm">
+            📥 全部收進我的書籤庫
+          </button>
+          <button type="button" id="exitSharedViewBtn" class="btn-secondary btn-sm">
+            🔙 返回我的書籤庫
+          </button>
+        </div>
+      </div>
+    </section>
 
     <!-- 輸入網址區塊 -->
     <section class="card input-section">
@@ -61,7 +82,7 @@
       </div>
     </section>
 
-    <!-- 結果與輸出區塊 (預設單欄長條流，適合手機與快速操作) -->
+    <!-- 結果與輸出區塊 -->
     <main id="resultSection" class="main-grid hidden">
       <!-- 區塊 1：網站資訊、分類與選用截圖 -->
       <section class="card preview-panel">
@@ -112,7 +133,7 @@
           </div>
         </div>
 
-        <!-- 圖片預覽與壓縮設定（僅在選擇圖片或貼圖時展開） -->
+        <!-- 圖片預覽與壓縮設定 -->
         <div id="imageExtraContainer" class="hidden">
           <div class="image-preview-box" id="imagePreviewBox">
             <div id="imageLoadingOverlay" class="image-loading hidden">
@@ -125,7 +146,6 @@
             </div>
           </div>
 
-          <!-- 保存模式與壓縮設定 -->
           <div class="field-group">
             <label>圖片保存為文字的方式</label>
             <div class="radio-cards">
@@ -182,7 +202,6 @@
           <span id="charCount" class="char-count">0 字元</span>
         </div>
 
-        <!-- 排版格式選擇 (預設為標準 Markdown) -->
         <div class="field-group">
           <label for="templateSelect">Obsidian 排版格式</label>
           <select id="templateSelect">
@@ -193,7 +212,6 @@
           </select>
         </div>
 
-        <!-- 一鍵複製主按鈕 -->
         <div class="action-buttons">
           <button type="button" id="copyBtn" class="btn-copy">
             📋 一鍵複製 Markdown（貼上 Obsidian）
@@ -203,19 +221,18 @@
           </button>
         </div>
 
-        <!-- 產生的文字內容 -->
         <div class="field-group markdown-box-group">
           <textarea id="markdownOutput" readonly spellcheck="false"></textarea>
         </div>
       </section>
     </main>
 
-    <!-- 書籤庫區塊 (支援長條閱讀模式與搜尋篩選) -->
+    <!-- 書籤庫區塊 (含多重暫存空間選擇與一鍵分享連結) -->
     <section id="bookmarkSection" class="card bookmark-section">
       <div class="bookmark-header">
         <div class="bookmark-title-group">
           <h2>📚 網站書籤庫</h2>
-          <span class="bookmark-subtitle">支援依分類、網站說明與標題快速搜尋，適合手機上下長條滑動閱讀</span>
+          <span class="bookmark-subtitle">支援依分類、網站說明與標題快速搜尋，並可一鍵產生分享連結傳給他人</span>
         </div>
         <div class="bookmark-tools">
           <button type="button" id="viewModeToggleBtn" class="btn-secondary btn-sm" title="切換長條閱讀清單或縮圖網格">
@@ -232,6 +249,37 @@
             <input type="file" id="importJsonInput" accept=".json" style="display: none;" />
           </label>
           <button type="button" id="clearHistoryBtn" class="btn-text-danger">🗑️ 清空</button>
+        </div>
+      </div>
+
+      <!-- 雲端暫存分享工具列 (多空間選單 + 防單一故障自動備援) -->
+      <div class="share-cloud-box">
+        <div class="share-cloud-controls">
+          <div class="share-provider-wrap">
+            <label for="shareProviderSelect">☁️ 分享暫存空間（防單點故障）：</label>
+            <select id="shareProviderSelect">
+              <option value="auto" selected>🔄 自動智慧備援（推薦：遇故障自動切換下一個空間）</option>
+              <option value="pastesdev">⚡ Pastes.dev 雲端暫存（支援大檔案與縮圖，最快）</option>
+              <option value="dpaste">📅 dpaste.com 雲端暫存（長效保存 365 天）</option>
+              <option value="jsonblob">📦 JSONBlob 雲端暫存（3 天短效）</option>
+              <option value="urlhash">🔗 網址直接編碼內嵌（不經第三方伺服器、永久有效，僅純文字）</option>
+            </select>
+          </div>
+          <button type="button" id="shareFilteredBtn" class="btn-share-cloud">
+            📤 產生目前書籤清單的分享連結
+          </button>
+        </div>
+
+        <!-- 產生的分享連結顯示區 -->
+        <div id="shareResultBar" class="share-result-bar hidden">
+          <div class="share-result-info">
+            <span id="shareProviderBadge" class="badge">已上傳至雲端</span>
+            <input type="text" id="shareUrlOutput" readonly />
+          </div>
+          <div class="share-result-actions">
+            <button type="button" id="copyShareUrlBtn" class="btn-copy btn-sm">📋 複製連結</button>
+            <button type="button" id="nativeShareBtn" class="btn-secondary btn-sm">📱 傳送到 LINE / 分享</button>
+          </div>
         </div>
       </div>
 
@@ -259,7 +307,7 @@
       <!-- 分類標籤篩選列 -->
       <div id="categoryFilterBar" class="category-pills"></div>
 
-      <!-- 書籤清單 (預設為適合手機長條閱讀的 stream-list 樣式) -->
+      <!-- 書籤清單 -->
       <div id="bookmarkList" class="bookmark-stream"></div>
 
       <!-- 無結果或空狀態提示 -->
